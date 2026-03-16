@@ -39,7 +39,7 @@
   "homepage": "https://rateship.io/docs",
   "repository": {
     "type": "git",
-    "url": "https://github.com/rateship/sdk"
+    "url": "https://github.com/AhmedAlbarghouti/rateship-sdk.git"
   },
   "devDependencies": {
     "tsup": "^8.0.0",
