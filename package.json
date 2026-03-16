@@ -1,0 +1,49 @@
+{
+  "name": "rateship",
+  "version": "0.1.0",
+  "description": "Official SDK for the RateShip shipping API. Get rates and purchase labels across Shippo, EasyPost, and ShipEngine through one unified API.",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "shipping",
+    "rates",
+    "labels",
+    "shippo",
+    "easypost",
+    "shipengine",
+    "api",
+    "sdk",
+    "rateship"
+  ],
+  "author": "RateShip <support@rateship.io>",
+  "license": "MIT",
+  "homepage": "https://rateship.io/docs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rateship/sdk"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^4.0.0"
+  }
+}
