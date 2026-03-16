@@ -3,8 +3,8 @@ export type Provider = "shippo" | "easypost" | "shipengine";
 
 // Rate types
 export interface RateRequest {
-  origin_zip: string;
-  destination_zip: string;
+  from_address: Address;
+  to_address: Address;
   weight: number;
   weight_unit: "lbs" | "oz";
   length: number;
@@ -43,6 +43,7 @@ export interface Address {
   city: string;
   state: string;
   zip: string;
+  phone: string;
   country?: string;
 }
 

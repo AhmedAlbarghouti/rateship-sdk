@@ -53,8 +53,22 @@ describe("rates.get", () => {
     });
 
     await client.rates.get({
-      origin_zip: "10001",
-      destination_zip: "90210",
+      from_address: {
+        name: "John Smith",
+        street1: "123 Main St",
+        city: "New York",
+        state: "NY",
+        zip: "10001",
+        phone: "2125551234",
+      },
+      to_address: {
+        name: "Jane Doe",
+        street1: "456 Oak Ave",
+        city: "Los Angeles",
+        state: "CA",
+        zip: "90001",
+        phone: "3105551234",
+      },
       weight: 2.5,
       weight_unit: "lbs",
       length: 10,
@@ -95,8 +109,22 @@ describe("rates.get", () => {
     mockResponse({ success: true, data: mockRates });
 
     const result = await client.rates.get({
-      origin_zip: "10001",
-      destination_zip: "90210",
+      from_address: {
+        name: "John Smith",
+        street1: "123 Main St",
+        city: "New York",
+        state: "NY",
+        zip: "10001",
+        phone: "2125551234",
+      },
+      to_address: {
+        name: "Jane Doe",
+        street1: "456 Oak Ave",
+        city: "Los Angeles",
+        state: "CA",
+        zip: "90001",
+        phone: "3105551234",
+      },
       weight: 1,
       weight_unit: "lbs",
       length: 5,
@@ -121,8 +149,22 @@ describe("rates.get", () => {
 
     await expect(
       client.rates.get({
-        origin_zip: "10001",
-        destination_zip: "90210",
+        from_address: {
+          name: "John Smith",
+          street1: "123 Main St",
+          city: "New York",
+          state: "NY",
+          zip: "10001",
+          phone: "2125551234",
+        },
+        to_address: {
+          name: "Jane Doe",
+          street1: "456 Oak Ave",
+          city: "Los Angeles",
+          state: "CA",
+          zip: "90001",
+          phone: "3105551234",
+        },
         weight: 1,
         weight_unit: "lbs",
         length: 5,
@@ -144,8 +186,22 @@ describe("rates.get", () => {
 
     try {
       await client.rates.get({
-        origin_zip: "10001",
-        destination_zip: "90210",
+        from_address: {
+          name: "John Smith",
+          street1: "123 Main St",
+          city: "New York",
+          state: "NY",
+          zip: "10001",
+          phone: "2125551234",
+        },
+        to_address: {
+          name: "Jane Doe",
+          street1: "456 Oak Ave",
+          city: "Los Angeles",
+          state: "CA",
+          zip: "90001",
+          phone: "3105551234",
+        },
         weight: 1,
         weight_unit: "lbs",
         length: 5,
@@ -195,6 +251,7 @@ describe("labels.purchase", () => {
         city: "SF",
         state: "CA",
         zip: "94107",
+        phone: "4155551234",
       },
       to_address: {
         name: "Test",
@@ -202,6 +259,7 @@ describe("labels.purchase", () => {
         city: "LA",
         state: "CA",
         zip: "90001",
+        phone: "3105551234",
       },
       weight: 1,
       weight_unit: "lbs",

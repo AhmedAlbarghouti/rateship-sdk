@@ -19,13 +19,27 @@ const rateship = new RateShip({
 
 // Get shipping rates
 const { rates, errors } = await rateship.rates.get({
-  origin_zip: "10001",
-  destination_zip: "90210",
+  from_address: {
+    name: "John Smith",
+    street1: "123 Main St",
+    city: "New York",
+    state: "NY",
+    zip: "10001",
+    phone: "2125551234",
+  },
+  to_address: {
+    name: "Jane Doe",
+    street1: "456 Oak Ave",
+    city: "Los Angeles",
+    state: "CA",
+    zip: "90001",
+    phone: "3105551234",
+  },
   weight: 2.5,
   weight_unit: "lbs",
-  length: 10,
+  length: 12,
   width: 8,
-  height: 4,
+  height: 6,
   package_count: 1,
 });
 
@@ -47,13 +61,27 @@ const rateship = new RateShip({
 
 ```typescript
 const { rates, errors } = await rateship.rates.get({
-  origin_zip: "10001",
-  destination_zip: "90210",
+  from_address: {
+    name: "John Smith",
+    street1: "123 Main St",
+    city: "New York",
+    state: "NY",
+    zip: "10001",
+    phone: "2125551234",
+  },
+  to_address: {
+    name: "Jane Doe",
+    street1: "456 Oak Ave",
+    city: "Los Angeles",
+    state: "CA",
+    zip: "90001",
+    phone: "3105551234",
+  },
   weight: 2.5,
   weight_unit: "lbs", // "lbs" | "oz"
-  length: 10,
+  length: 12,
   width: 8,
-  height: 4,
+  height: 6,
   package_count: 1,
 });
 ```
@@ -89,6 +117,7 @@ const label = await rateship.labels.purchase({
     city: "San Francisco",
     state: "CA",
     zip: "94107",
+    phone: "4155551234",
   },
   to_address: {
     name: "John Doe",
@@ -96,6 +125,7 @@ const label = await rateship.labels.purchase({
     city: "Los Angeles",
     state: "CA",
     zip: "90001",
+    phone: "3105551234",
   },
   weight: 2.5,
   weight_unit: "lbs",
