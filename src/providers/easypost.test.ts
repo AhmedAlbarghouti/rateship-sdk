@@ -1,6 +1,7 @@
+import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { easypost } from "./easypost";
-import { RateShipError } from "../errors";
+import { RateShipError, WebhookVerificationError } from "../errors";
 import type { NormalizedRate, RateRequest } from "../types";
 
 const sampleRequest: RateRequest = {
@@ -394,5 +395,187 @@ describe("easypost.createLabel", () => {
       thrown = e;
     }
     expect((thrown as RateShipError).code).toBe("PROVIDER_ERROR");
+  });
+});
+
+describe("easypost.verifyWebhook", () => {
+  const SECRET = "EZ_wh_secret_123";
+
+  function signEasyPostHeader(body: string, secret: string = SECRET): string {
+    const normalized = secret.normalize("NFKD");
+    const sig = createHmac("sha256", normalized).update(body).digest("hex");
+    return `hmac-sha256-hex=${sig}`;
+  }
+
+  const transitBody = JSON.stringify({
+    description: "tracker.updated",
+    result: {
+      tracking_code: "1Z999AA10123456784",
+      carrier: "UPS",
+      status: "in_transit",
+      tracking_details: [
+        { status: "in_transit", message: "On vehicle for delivery" },
+      ],
+      est_delivery_date: "2026-04-18",
+    },
+  });
+
+  const deliveredBody = JSON.stringify({
+    description: "tracker.updated",
+    result: {
+      tracking_code: "1Z999AA10123456784",
+      carrier: "UPS",
+      status: "delivered",
+      tracking_details: [
+        {
+          status: "delivered",
+          message: "Delivered",
+          datetime: "2026-04-17T15:30:00Z",
+          tracking_location: {
+            city: "Mountain View",
+            state: "CA",
+            zip: "94043",
+            country: "US",
+          },
+        },
+      ],
+    },
+  });
+
+  it("returns a normalized tracking.updated event on 'in_transit' status", () => {
+    const adapter = easypost({ apiKey: "EZAK_test_xyz" });
+
+    const event = adapter.verifyWebhook(
+      transitBody,
+      signEasyPostHeader(transitBody),
+      SECRET,
+    );
+
+    expect(event.type).toBe("tracking.updated");
+    if (event.type === "tracking.updated") {
+      expect(event.provider).toBe("easypost");
+      expect(event.tracking_number).toBe("1Z999AA10123456784");
+      expect(event.carrier).toBe("UPS");
+      expect(event.status).toBe("in_transit");
+      expect(event.estimated_delivery).toBe("2026-04-18");
+    }
+  });
+
+  it("returns a normalized tracking.delivered event on 'delivered' status", () => {
+    const adapter = easypost({ apiKey: "EZAK_test_xyz" });
+
+    const event = adapter.verifyWebhook(
+      deliveredBody,
+      signEasyPostHeader(deliveredBody),
+      SECRET,
+    );
+
+    expect(event.type).toBe("tracking.delivered");
+    if (event.type === "tracking.delivered") {
+      expect(event.tracking_number).toBe("1Z999AA10123456784");
+      expect(event.delivered_at).toBe("2026-04-17T15:30:00Z");
+      expect(event.location).toMatchObject({ city: "Mountain View" });
+    }
+  });
+
+  it("accepts header value without the 'hmac-sha256-hex=' prefix (bare hex)", () => {
+    const adapter = easypost({ apiKey: "EZAK_test_xyz" });
+    const prefixed = signEasyPostHeader(transitBody);
+    const bare = prefixed.replace(/^hmac-sha256-hex=/, "");
+
+    const event = adapter.verifyWebhook(transitBody, bare, SECRET);
+    expect(event.type).toBe("tracking.updated");
+  });
+
+  it("accepts Buffer rawBody", () => {
+    const adapter = easypost({ apiKey: "EZAK_test_xyz" });
+    const event = adapter.verifyWebhook(
+      Buffer.from(transitBody, "utf8"),
+      signEasyPostHeader(transitBody),
+      SECRET,
+    );
+    expect(event.type).toBe("tracking.updated");
+  });
+
+  it("applies NFKD normalization to the secret (matches EasyPost client libs)", () => {
+    // A secret with a composed unicode char; NFKD-normalized equivalent is
+    // used to sign. Verify MUST match when user passes the composed form.
+    const composedSecret = "caf\u00e9"; // "café" with composed é
+    const decomposedSecret = composedSecret.normalize("NFKD"); // "cafe\u0301"
+
+    const sig = createHmac("sha256", decomposedSecret)
+      .update(transitBody)
+      .digest("hex");
+    const header = `hmac-sha256-hex=${sig}`;
+
+    const adapter = easypost({ apiKey: "EZAK_test_xyz" });
+    const event = adapter.verifyWebhook(transitBody, header, composedSecret);
+    expect(event.type).toBe("tracking.updated");
+  });
+
+  it("throws WebhookVerificationError on tampered body", () => {
+    const adapter = easypost({ apiKey: "EZAK_test_xyz" });
+    let thrown: unknown;
+    try {
+      adapter.verifyWebhook(
+        transitBody + "tampered",
+        signEasyPostHeader(transitBody),
+        SECRET,
+      );
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(WebhookVerificationError);
+    expect((thrown as WebhookVerificationError).code).toBe(
+      "WEBHOOK_VERIFICATION_FAILED",
+    );
+  });
+
+  it("throws WebhookVerificationError on wrong secret", () => {
+    const adapter = easypost({ apiKey: "EZAK_test_xyz" });
+    let thrown: unknown;
+    try {
+      adapter.verifyWebhook(
+        transitBody,
+        signEasyPostHeader(transitBody),
+        "wrong_secret",
+      );
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(WebhookVerificationError);
+  });
+
+  it("throws WebhookVerificationError on empty signature", () => {
+    const adapter = easypost({ apiKey: "EZAK_test_xyz" });
+    let thrown: unknown;
+    try {
+      adapter.verifyWebhook(transitBody, "", SECRET);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(WebhookVerificationError);
+  });
+
+  it("maps 'return_to_sender' to status=failure on tracking.updated", () => {
+    const body = JSON.stringify({
+      description: "tracker.updated",
+      result: {
+        tracking_code: "1Z",
+        carrier: "UPS",
+        status: "return_to_sender",
+        tracking_details: [{ status: "return_to_sender", message: "Returning" }],
+      },
+    });
+    const adapter = easypost({ apiKey: "EZAK_test_xyz" });
+    const event = adapter.verifyWebhook(
+      body,
+      signEasyPostHeader(body),
+      SECRET,
+    );
+    expect(event.type).toBe("tracking.updated");
+    if (event.type === "tracking.updated") {
+      expect(event.status).toBe("failure");
+    }
   });
 });

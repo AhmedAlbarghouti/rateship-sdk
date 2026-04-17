@@ -1,14 +1,22 @@
 import { Buffer } from "node:buffer";
-import { RateShipError } from "../errors";
+import { RateShipError, WebhookVerificationError } from "../errors";
 import { createProviderFetcher } from "../internal/http";
+import {
+  hmacSha256Hex,
+  rawBodyToString,
+  timingSafeHexEqual,
+} from "../internal/hmac";
 import { amountToCents } from "../internal/money";
 import type {
   Address,
+  EventLocation,
   Label,
+  NormalizedEvent,
   NormalizedRate,
   Parcel,
   ProviderAdapter,
   RateRequest,
+  TrackingStatus,
 } from "../types";
 
 const DEFAULT_BASE_URL = "https://api.easypost.com/v2";
@@ -190,12 +198,145 @@ export function easypost(options: EasyPostOptions): ProviderAdapter {
       };
     },
 
-    verifyWebhook() {
-      throw new RateShipError(
-        "easypost.verifyWebhook() is not yet implemented.",
-        "PROVIDER_ERROR",
-        { provider: "easypost" },
-      );
+    verifyWebhook(
+      rawBody: string | Buffer,
+      signature: string,
+      secret: string,
+    ): NormalizedEvent {
+      return verifyEasyPostWebhook(rawBody, signature, secret);
     },
+  };
+}
+
+// -- Webhook verification ----------------------------------------------------
+
+const EASYPOST_SIGNATURE_PREFIX = "hmac-sha256-hex=";
+
+function mapEasyPostStatus(raw: string): TrackingStatus {
+  switch (raw) {
+    case "pre_transit":
+      return "pre_transit";
+    case "in_transit":
+      return "in_transit";
+    case "out_for_delivery":
+      return "out_for_delivery";
+    case "delivered":
+      // Caller switches to tracking.delivered event for this status.
+      return "in_transit";
+    case "return_to_sender":
+    case "failure":
+    case "error":
+      return "failure";
+    default:
+      return "unknown";
+  }
+}
+
+interface EasyPostTrackingDetail {
+  status?: string;
+  message?: string;
+  datetime?: string;
+  tracking_location?: EventLocation;
+}
+
+interface EasyPostTrackerPayload {
+  description?: string;
+  result?: {
+    tracking_code?: string;
+    carrier?: string;
+    status?: string;
+    tracking_details?: EasyPostTrackingDetail[];
+    est_delivery_date?: string | null;
+  };
+}
+
+function verifyEasyPostWebhook(
+  rawBody: string | Buffer,
+  signatureHeader: string,
+  secret: string,
+): NormalizedEvent {
+  if (!secret) {
+    throw new WebhookVerificationError(
+      "EasyPost verifyWebhook: secret is required.",
+      { provider: "easypost" },
+    );
+  }
+  if (!signatureHeader) {
+    throw new WebhookVerificationError(
+      "EasyPost signature header is empty.",
+      { provider: "easypost" },
+    );
+  }
+
+  // EasyPost's docs + official client libs use the prefixed form
+  // `hmac-sha256-hex=<hex>` but also accept the bare hex in the wild.
+  const trimmedSig = signatureHeader.startsWith(EASYPOST_SIGNATURE_PREFIX)
+    ? signatureHeader.slice(EASYPOST_SIGNATURE_PREFIX.length)
+    : signatureHeader;
+
+  const bodyStr = rawBodyToString(rawBody);
+  // EasyPost client libs normalize the secret with NFKD. Match them so
+  // secrets containing composed unicode (e.g. "café") verify the same
+  // way they do in Python / Go / Ruby.
+  const normalizedSecret = secret.normalize("NFKD");
+  const expected = hmacSha256Hex(normalizedSecret, bodyStr);
+
+  if (!timingSafeHexEqual(trimmedSig, expected)) {
+    throw new WebhookVerificationError(
+      "EasyPost webhook signature did not match.",
+      { provider: "easypost" },
+    );
+  }
+
+  let parsed: EasyPostTrackerPayload;
+  try {
+    parsed = JSON.parse(bodyStr) as EasyPostTrackerPayload;
+  } catch (err) {
+    throw new WebhookVerificationError(
+      "EasyPost webhook body is not valid JSON.",
+      { provider: "easypost", cause: err },
+    );
+  }
+
+  const result = parsed.result ?? {};
+  const rawStatus = result.status ?? "";
+  const trackingNumber = result.tracking_code ?? "";
+  const carrier = (result.carrier ?? "").toUpperCase();
+  const details = result.tracking_details ?? [];
+  const last = details[details.length - 1];
+  const occurredAt = last?.datetime ?? new Date().toISOString();
+  const statusDetail = last?.message;
+  const location = last?.tracking_location;
+
+  if (!trackingNumber) {
+    throw new WebhookVerificationError(
+      "EasyPost webhook body is missing result.tracking_code.",
+      { provider: "easypost" },
+    );
+  }
+
+  if (rawStatus === "delivered") {
+    return {
+      type: "tracking.delivered",
+      provider: "easypost",
+      tracking_number: trackingNumber,
+      carrier,
+      delivered_at: occurredAt,
+      location,
+      raw: parsed,
+    };
+  }
+
+  return {
+    type: "tracking.updated",
+    provider: "easypost",
+    tracking_number: trackingNumber,
+    carrier,
+    status: mapEasyPostStatus(rawStatus),
+    status_detail: statusDetail,
+    location,
+    estimated_delivery: result.est_delivery_date ?? undefined,
+    occurred_at: occurredAt,
+    raw: parsed,
   };
 }

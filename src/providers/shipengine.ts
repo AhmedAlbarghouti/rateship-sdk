@@ -225,10 +225,14 @@ export function shipengine(options: ShipEngineOptions): ProviderAdapter {
       };
     },
 
-    verifyWebhook() {
+    verifyWebhook(): never {
+      // ShipEngine signs webhooks with RSA-SHA256 + a JWKS key-rotation
+      // endpoint (not HMAC with a shared secret like Shippo/EasyPost). That
+      // requires async key fetching + caching, which doesn't fit the SDK's
+      // sync `verify()` contract. Deferred to v2.1+.
       throw new RateShipError(
-        "shipengine.verifyWebhook() is not yet implemented.",
-        "PROVIDER_ERROR",
+        "ShipEngine webhook verification is not supported in v2.0.0. ShipEngine uses RSA-SHA256 with JWKS key rotation, which requires async key fetching — this will ship in v2.1+. For now, verify ShipEngine webhooks yourself following https://www.shipengine.com/docs/webhooks/#securing-your-webhooks-with-a-signature",
+        "CONFIGURATION_ERROR",
         { provider: "shipengine" },
       );
     },

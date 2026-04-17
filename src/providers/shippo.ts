@@ -1,17 +1,27 @@
-import { RateShipError } from "../errors";
+import { RateShipError, WebhookVerificationError } from "../errors";
 import { createProviderFetcher } from "../internal/http";
+import {
+  hmacSha256Hex,
+  rawBodyToString,
+  timingSafeHexEqual,
+} from "../internal/hmac";
 import { amountToCents } from "../internal/money";
 import type {
   Address,
+  EventLocation,
   Label,
+  NormalizedEvent,
   NormalizedRate,
   Parcel,
   ProviderAdapter,
   RateRequest,
+  TrackingStatus,
 } from "../types";
 
 const DEFAULT_BASE_URL = "https://api.goshippo.com";
 const DEFAULT_TIMEOUT_MS = 15_000;
+/** Shippo doesn't document a tolerance; 5 minutes matches Stripe/GitHub norms. */
+const WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS = 300;
 
 export interface ShippoOptions {
   apiKey: string;
@@ -185,12 +195,163 @@ export function shippo(options: ShippoOptions): ProviderAdapter {
       };
     },
 
-    verifyWebhook() {
-      throw new RateShipError(
-        "shippo.verifyWebhook() is not yet implemented.",
-        "PROVIDER_ERROR",
-        { provider: "shippo" },
-      );
+    verifyWebhook(
+      rawBody: string | Buffer,
+      signature: string,
+      secret: string,
+    ): NormalizedEvent {
+      return verifyShippoWebhook(rawBody, signature, secret);
     },
+  };
+}
+
+// -- Webhook verification ----------------------------------------------------
+
+/**
+ * Parse Shippo's `t=<unix>,v1=<hex>` signature header value.
+ * Returns null if either piece is missing (triggers verification failure).
+ */
+function parseShippoSignatureHeader(
+  header: string,
+): { timestamp: number; signature: string } | null {
+  const parts = header.split(",").map((p) => p.trim());
+  let ts: number | null = null;
+  let sig: string | null = null;
+  for (const part of parts) {
+    const eq = part.indexOf("=");
+    if (eq < 0) continue;
+    const key = part.slice(0, eq);
+    const value = part.slice(eq + 1);
+    if (key === "t") {
+      const n = Number(value);
+      if (Number.isInteger(n) && n > 0) ts = n;
+    } else if (key === "v1") {
+      sig = value;
+    }
+  }
+  if (ts === null || sig === null) return null;
+  return { timestamp: ts, signature: sig };
+}
+
+function mapShippoStatus(raw: string): TrackingStatus {
+  switch (raw) {
+    case "PRE_TRANSIT":
+      return "pre_transit";
+    case "TRANSIT":
+      return "in_transit";
+    case "DELIVERED":
+      // Caller decides whether to emit tracking.delivered instead.
+      return "in_transit";
+    case "RETURNED":
+    case "FAILURE":
+      return "failure";
+    default:
+      return "unknown";
+  }
+}
+
+interface ShippoTrackingStatus {
+  status?: string;
+  status_detail?: string;
+  status_date?: string;
+  location?: EventLocation;
+}
+
+interface ShippoTrackingPayload {
+  data?: {
+    tracking_number?: string;
+    carrier?: string;
+    tracking_status?: ShippoTrackingStatus;
+  };
+}
+
+function verifyShippoWebhook(
+  rawBody: string | Buffer,
+  signatureHeader: string,
+  secret: string,
+): NormalizedEvent {
+  if (!secret) {
+    throw new WebhookVerificationError(
+      "Shippo verifyWebhook: secret is required.",
+      { provider: "shippo" },
+    );
+  }
+
+  const parsed = parseShippoSignatureHeader(signatureHeader);
+  if (!parsed) {
+    throw new WebhookVerificationError(
+      "Shippo signature header is malformed. Expected `t=<unix>,v1=<hex>`.",
+      { provider: "shippo" },
+    );
+  }
+
+  const { timestamp, signature } = parsed;
+
+  const now = Math.floor(Date.now() / 1000);
+  if (Math.abs(now - timestamp) > WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS) {
+    throw new WebhookVerificationError(
+      "Shippo webhook timestamp is stale. Replay-protection rejected the request.",
+      { provider: "shippo" },
+    );
+  }
+
+  const bodyStr = rawBodyToString(rawBody);
+  const expected = hmacSha256Hex(secret, `${timestamp}.${bodyStr}`);
+
+  if (!timingSafeHexEqual(signature, expected)) {
+    throw new WebhookVerificationError(
+      "Shippo webhook signature did not match.",
+      { provider: "shippo" },
+    );
+  }
+
+  // Signature is valid. Parse and normalize.
+  let parsedBody: ShippoTrackingPayload;
+  try {
+    parsedBody = JSON.parse(bodyStr) as ShippoTrackingPayload;
+  } catch (err) {
+    throw new WebhookVerificationError(
+      "Shippo webhook body is not valid JSON.",
+      { provider: "shippo", cause: err },
+    );
+  }
+
+  const data = parsedBody.data ?? {};
+  const ts = data.tracking_status ?? {};
+  const rawStatus = ts.status ?? "";
+  const trackingNumber = data.tracking_number ?? "";
+  const carrier = (data.carrier ?? "").toUpperCase();
+  const location = ts.location;
+  const occurredAt = ts.status_date ?? new Date().toISOString();
+
+  if (!trackingNumber) {
+    throw new WebhookVerificationError(
+      "Shippo webhook body is missing data.tracking_number.",
+      { provider: "shippo" },
+    );
+  }
+
+  if (rawStatus === "DELIVERED") {
+    return {
+      type: "tracking.delivered",
+      provider: "shippo",
+      tracking_number: trackingNumber,
+      carrier,
+      delivered_at: occurredAt,
+      location,
+      raw: parsedBody,
+    };
+  }
+
+  return {
+    type: "tracking.updated",
+    provider: "shippo",
+    tracking_number: trackingNumber,
+    carrier,
+    status: mapShippoStatus(rawStatus),
+    status_detail: ts.status_detail,
+    location,
+    occurred_at: occurredAt,
+    raw: parsedBody,
   };
 }

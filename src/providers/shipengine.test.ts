@@ -442,3 +442,21 @@ describe("shipengine.createLabel", () => {
     expect((thrown as RateShipError).code).toBe("PROVIDER_ERROR");
   });
 });
+
+describe("shipengine.verifyWebhook", () => {
+  it("throws CONFIGURATION_ERROR explaining RSA+JWKS is v2.1+", () => {
+    const adapter = shipengine({ apiKey: "TEST_xyz" });
+    let thrown: unknown;
+    try {
+      adapter.verifyWebhook("{}", "any-sig", "any-secret");
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(RateShipError);
+    expect((thrown as RateShipError).code).toBe("CONFIGURATION_ERROR");
+    expect((thrown as RateShipError).provider).toBe("shipengine");
+    // Error message should point the user at what to do next.
+    const msg = (thrown as RateShipError).message;
+    expect(msg).toMatch(/RSA|JWKS|not supported|v2\.1/i);
+  });
+});

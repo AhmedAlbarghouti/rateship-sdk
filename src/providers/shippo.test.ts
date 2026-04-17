@@ -1,6 +1,7 @@
+import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { shippo } from "./shippo";
-import { RateShipError } from "../errors";
+import { RateShipError, WebhookVerificationError } from "../errors";
 import type { NormalizedRate, RateRequest } from "../types";
 
 const sampleRequest: RateRequest = {
@@ -415,5 +416,167 @@ describe("shippo.createLabel", () => {
     }
 
     expect((thrown as RateShipError).code).toBe("TIMEOUT");
+  });
+});
+
+describe("shippo.verifyWebhook", () => {
+  const SECRET = "shippo_wh_secret_abc";
+
+  function signShippoHeader(timestamp: number, body: string): string {
+    const signed = `${timestamp}.${body}`;
+    const sig = createHmac("sha256", SECRET).update(signed).digest("hex");
+    return `t=${timestamp},v1=${sig}`;
+  }
+
+  const transitBody = JSON.stringify({
+    event: "track_updated",
+    data: {
+      tracking_number: "1Z999AA10123456784",
+      carrier: "ups",
+      tracking_status: {
+        status: "TRANSIT",
+        status_detail: "Package in transit to destination",
+        location: { city: "Oakland", state: "CA", zip: "94608", country: "US" },
+        status_date: "2026-04-17T10:00:00Z",
+      },
+    },
+  });
+
+  const deliveredBody = JSON.stringify({
+    event: "track_updated",
+    data: {
+      tracking_number: "1Z999AA10123456784",
+      carrier: "ups",
+      tracking_status: {
+        status: "DELIVERED",
+        status_detail: "Delivered, front door",
+        location: { city: "Mountain View", state: "CA", zip: "94043", country: "US" },
+        status_date: "2026-04-17T15:30:00Z",
+      },
+    },
+  });
+
+  it("returns a normalized tracking.updated event on TRANSIT status", () => {
+    const ts = Math.floor(Date.now() / 1000);
+    const adapter = shippo({ apiKey: "shippo_test_xyz" });
+
+    const event = adapter.verifyWebhook(
+      transitBody,
+      signShippoHeader(ts, transitBody),
+      SECRET,
+    );
+
+    expect(event.type).toBe("tracking.updated");
+    if (event.type === "tracking.updated") {
+      expect(event.provider).toBe("shippo");
+      expect(event.tracking_number).toBe("1Z999AA10123456784");
+      expect(event.carrier).toBe("UPS");
+      expect(event.status).toBe("in_transit");
+      expect(event.status_detail).toBe("Package in transit to destination");
+      expect(event.location).toMatchObject({ city: "Oakland", state: "CA" });
+      expect(event.occurred_at).toBe("2026-04-17T10:00:00Z");
+      expect(event.raw).toBeDefined();
+    }
+  });
+
+  it("returns a normalized tracking.delivered event on DELIVERED status", () => {
+    const ts = Math.floor(Date.now() / 1000);
+    const adapter = shippo({ apiKey: "shippo_test_xyz" });
+
+    const event = adapter.verifyWebhook(
+      deliveredBody,
+      signShippoHeader(ts, deliveredBody),
+      SECRET,
+    );
+
+    expect(event.type).toBe("tracking.delivered");
+    if (event.type === "tracking.delivered") {
+      expect(event.tracking_number).toBe("1Z999AA10123456784");
+      expect(event.delivered_at).toBe("2026-04-17T15:30:00Z");
+      expect(event.location).toMatchObject({ city: "Mountain View" });
+    }
+  });
+
+  it("accepts Buffer rawBody as well as string", () => {
+    const ts = Math.floor(Date.now() / 1000);
+    const adapter = shippo({ apiKey: "shippo_test_xyz" });
+
+    const event = adapter.verifyWebhook(
+      Buffer.from(transitBody, "utf8"),
+      signShippoHeader(ts, transitBody),
+      SECRET,
+    );
+
+    expect(event.type).toBe("tracking.updated");
+  });
+
+  it("throws WebhookVerificationError on tampered body", () => {
+    const ts = Math.floor(Date.now() / 1000);
+    const validHeader = signShippoHeader(ts, transitBody);
+    const adapter = shippo({ apiKey: "shippo_test_xyz" });
+
+    let thrown: unknown;
+    try {
+      adapter.verifyWebhook(transitBody + "tampered", validHeader, SECRET);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(WebhookVerificationError);
+    expect((thrown as WebhookVerificationError).code).toBe(
+      "WEBHOOK_VERIFICATION_FAILED",
+    );
+  });
+
+  it("throws WebhookVerificationError on wrong secret", () => {
+    const ts = Math.floor(Date.now() / 1000);
+    const header = signShippoHeader(ts, transitBody);
+    const adapter = shippo({ apiKey: "shippo_test_xyz" });
+
+    let thrown: unknown;
+    try {
+      adapter.verifyWebhook(transitBody, header, "wrong_secret");
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(WebhookVerificationError);
+  });
+
+  it("throws WebhookVerificationError on stale timestamp (>5 min old)", () => {
+    const ts = Math.floor(Date.now() / 1000) - 60 * 10; // 10 min old
+    const adapter = shippo({ apiKey: "shippo_test_xyz" });
+
+    let thrown: unknown;
+    try {
+      adapter.verifyWebhook(transitBody, signShippoHeader(ts, transitBody), SECRET);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(WebhookVerificationError);
+    expect((thrown as WebhookVerificationError).message).toMatch(
+      /stale|timestamp/i,
+    );
+  });
+
+  it("throws WebhookVerificationError on missing 't=' in header", () => {
+    const adapter = shippo({ apiKey: "shippo_test_xyz" });
+    let thrown: unknown;
+    try {
+      adapter.verifyWebhook(transitBody, "v1=abcdef", SECRET);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(WebhookVerificationError);
+  });
+
+  it("throws WebhookVerificationError on missing 'v1=' in header", () => {
+    const ts = Math.floor(Date.now() / 1000);
+    const adapter = shippo({ apiKey: "shippo_test_xyz" });
+    let thrown: unknown;
+    try {
+      adapter.verifyWebhook(transitBody, `t=${ts}`, SECRET);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(WebhookVerificationError);
   });
 });
