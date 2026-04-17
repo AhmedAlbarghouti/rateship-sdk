@@ -1,222 +1,312 @@
 # rateship
 
-Official SDK for the [RateShip](https://rateship.io) shipping API. Get rates and purchase labels across Shippo, EasyPost, and ShipEngine through one unified API.
+Provider-agnostic shipping SDK for Node. **One API across every major shipping provider — your backend, your keys, zero lock-in.**
+
+[![npm](https://img.shields.io/npm/v/rateship.svg)](https://www.npmjs.com/package/rateship)
+[![license](https://img.shields.io/npm/l/rateship.svg)](./LICENSE)
+
+- **Multi-provider by default** — configure EasyPost, Shippo, and ShipEngine at once; one `getRates()` call fans out in parallel and returns normalized rates across all of them.
+- **Stateful label purchase** — pass a rate back to `createLabel(rate)` and the SDK buys it through the right provider in a single API call.
+- **Webhook verification built in** — `webhooks.verify()` validates HMAC signatures and returns typed, normalized events.
+- **Zero runtime dependencies.** Node 20+, native `fetch`, native `crypto`.
+- **Full TypeScript.** Every response, every event, every error is typed.
+- **Tree-shakable.** Import a single provider and the rest never reaches your bundle.
+
+```ts
+import { RateShip, easypost, shippo } from 'rateship';
+
+const client = new RateShip({
+  providers: [
+    easypost({ apiKey: process.env.EASYPOST_KEY! }),
+    shippo({ apiKey: process.env.SHIPPO_KEY! }),
+  ],
+});
+
+const { rates, errors } = await client.getRates(request);
+const label = await client.createLabel(rates[0]);
+```
+
+---
 
 ## Install
 
 ```bash
 npm install rateship
+# or
+pnpm add rateship
+# or
+yarn add rateship
 ```
 
-## Quick Start
+Requires **Node 20+**.
 
-```typescript
-import { RateShip } from "rateship";
+## Getting Provider Keys
 
-const rateship = new RateShip({
-  apiKey: "rs_dev_your_key_here",
+You bring your own provider credentials. No RateShip account required.
+
+| Provider | Dashboard | Key format |
+|---|---|---|
+| **EasyPost** | https://www.easypost.com/account/api-keys | `EZ_...` (test) / `EZAK_...` (prod) |
+| **Shippo** | https://apps.goshippo.com/settings/api | `shippo_test_...` / `shippo_live_...` |
+| **ShipEngine** | https://app.shipengine.com/#/settings/api-keys | `TEST_...` / `live_...` |
+
+## Quickstart
+
+```ts
+import { RateShip, easypost, shippo, shipengine } from 'rateship';
+
+const client = new RateShip({
+  providers: [
+    easypost({ apiKey: process.env.EASYPOST_KEY! }),
+    shippo({ apiKey: process.env.SHIPPO_KEY! }),
+    shipengine({ apiKey: process.env.SHIPENGINE_KEY! }),
+  ],
 });
 
-// Get shipping rates
-const { rates, errors } = await rateship.rates.get({
-  from_address: {
-    name: "John Smith",
-    street1: "123 Main St",
-    city: "New York",
-    state: "NY",
-    zip: "10001",
-    phone: "2125551234",
+// Fan out to every configured provider in parallel.
+const { rates, errors } = await client.getRates({
+  from: {
+    name: 'Warehouse',
+    street1: '500 Terry A Francois Blvd',
+    city: 'San Francisco',
+    state: 'CA',
+    zip: '94158',
+    country: 'US',
   },
-  to_address: {
-    name: "Jane Doe",
-    street1: "456 Oak Ave",
-    city: "Los Angeles",
-    state: "CA",
-    zip: "90001",
-    phone: "3105551234",
+  to: {
+    name: 'Jane Doe',
+    street1: '1600 Amphitheatre Pkwy',
+    city: 'Mountain View',
+    state: 'CA',
+    zip: '94043',
+    country: 'US',
   },
-  weight: 2.5,
-  weight_unit: "lbs",
-  length: 12,
-  width: 8,
-  height: 6,
-  package_count: 1,
+  parcel: {
+    weight: 2,
+    weight_unit: 'lb',
+    length: 10,
+    width: 8,
+    height: 6,
+    distance_unit: 'in',
+  },
 });
 
-console.log(rates); // Normalized rates from all connected providers
+// rates are sorted ascending by price_cents
+// errors[] holds per-provider failures (partial success)
+
+const label = await client.createLabel(rates[0]);
+console.log(label.tracking_number, label.label_url);
 ```
 
 ## API Reference
 
-### Initialize
+### `new RateShip({ providers })`
 
-```typescript
-const rateship = new RateShip({
-  apiKey: "rs_dev_your_key_here", // Required
-  baseUrl: "https://rateship.io", // Optional, defaults to production
+Configure one or more provider adapters:
+
+```ts
+const client = new RateShip({
+  providers: [
+    easypost({ apiKey: '...' }),
+    shippo({ apiKey: '...' }),
+    shipengine({ apiKey: '...' }),
+  ],
 });
 ```
 
-### Get Rates
+**Rules:**
+- At least one provider is required. Passing `[]` throws `CONFIGURATION_ERROR`.
+- Only one adapter per provider type at this version. Passing two `easypost(...)` adapters throws `CONFIGURATION_ERROR`.
+- No network calls happen at construction. Invalid API keys surface on the first `getRates()` / `createLabel()` call via the `errors[]` array or a thrown `RateShipError`.
 
-```typescript
-const { rates, errors } = await rateship.rates.get({
-  from_address: {
-    name: "John Smith",
-    street1: "123 Main St",
-    city: "New York",
-    state: "NY",
-    zip: "10001",
-    phone: "2125551234",
-  },
-  to_address: {
-    name: "Jane Doe",
-    street1: "456 Oak Ave",
-    city: "Los Angeles",
-    state: "CA",
-    zip: "90001",
-    phone: "3105551234",
-  },
-  weight: 2.5,
-  weight_unit: "lbs", // "lbs" | "oz"
-  length: 12,
-  width: 8,
-  height: 6,
-  package_count: 1,
-});
-```
+### `client.getRates(request) → { rates, errors }`
 
-Each rate in the `rates` array:
+Parallel fan-out across every configured provider. Returns both successful rates and per-provider failures — one provider being down never kills the whole call.
 
-```typescript
-{
-  provider: "shippo" | "easypost" | "shipengine",
-  carrier: "USPS",
-  service: "Ground Advantage",
-  price_cents: 965,
-  currency: "USD",
-  estimated_days: 5,
-  estimated_delivery: null,
-  rate_id: "5e228fbf...",
-  raw: { /* original provider response */ }
+```ts
+interface RatesResponse {
+  rates: NormalizedRate[];   // sorted ascending by price_cents
+  errors: ProviderError[];   // one entry per failed provider, empty if all OK
+}
+
+interface NormalizedRate {
+  provider: 'easypost' | 'shippo' | 'shipengine';
+  carrier: string;           // "UPS", "USPS", "FedEx"
+  service: string;           // "Ground", "Priority Mail", etc.
+  price_cents: number;       // always integer cents, always USD at v2.0
+  currency: 'USD';
+  estimated_days: number | null;
+  estimated_delivery: string | null;  // ISO date
+  rate_id: string;           // provider-native rate id
+  raw: object;               // full provider response, untouched
 }
 ```
 
-### Purchase a Label
+### `client.createLabel(rate) → Label`
 
-```typescript
-const label = await rateship.labels.purchase({
-  provider: "shippo",
-  rate_id: "5e228fbf...",
-  carrier: "USPS",
-  service: "Ground Advantage",
-  price_cents: 965,
-  from_address: {
-    name: "Jane Smith",
-    street1: "123 Main St",
-    city: "San Francisco",
-    state: "CA",
-    zip: "94107",
-    phone: "4155551234",
-  },
-  to_address: {
-    name: "John Doe",
-    street1: "456 Oak Ave",
-    city: "Los Angeles",
-    state: "CA",
-    zip: "90001",
-    phone: "3105551234",
-  },
-  weight: 2.5,
-  weight_unit: "lbs",
-  length: 10,
-  width: 8,
-  height: 4,
-  package_count: 1,
-});
+Buy the label for a rate you got from `getRates()`. Pass the whole `NormalizedRate` object back — the SDK uses the `raw` field to reconstruct the provider-native purchase call in one HTTP hop.
 
-console.log(label.tracking_number); // "9400111899223..."
-console.log(label.label_url);       // "https://..."
+```ts
+const label = await client.createLabel(rates[0]);
+
+interface Label {
+  provider: 'easypost' | 'shippo' | 'shipengine';
+  carrier: string;
+  service: string;
+  price_cents: number;
+  currency: 'USD';
+  tracking_number: string;   // required — success guarantees this exists
+  label_url: string;         // required
+  label_id: string;          // provider-native label identifier
+  rate_id: string;
+  created_at: string;        // ISO timestamp
+  raw: object;
+}
 ```
 
-### List Labels
+Throws `RateShipError` on any failure (provider error, auth, timeout, network). Label purchase is single-provider, so there's no partial success shape — just one exception or one result.
 
-```typescript
-const { items, page, total } = await rateship.labels.list({
-  page: 1,
-  page_size: 10,
-  provider: "shippo",    // optional filter
-  date_from: "2026-03-01", // optional
-  date_to: "2026-03-31",   // optional
+### `client.webhooks.verify({ provider, rawBody, signature, secret }) → NormalizedEvent`
+
+Verify the HMAC signature of an inbound provider webhook and return a normalized, typed event. Throws `WebhookVerificationError` on mismatch — never returns null, so auth-bypass bugs are impossible.
+
+```ts
+// Express
+app.post('/webhooks/shippo', express.raw({ type: 'application/json' }), (req, res) => {
+  try {
+    const event = client.webhooks.verify({
+      provider: 'shippo',
+      rawBody: req.body,                                    // Buffer, not parsed JSON
+      signature: req.header('Shippo-Auth-Signature')!,
+      secret: process.env.SHIPPO_WEBHOOK_SECRET!,
+    });
+
+    if (event.type === 'tracking.delivered') {
+      // event.delivered_at, event.location, event.signed_by
+    } else {
+      // event.status is one of: 'pre_transit' | 'in_transit' |
+      //   'out_for_delivery' | 'failure' | 'unknown'
+      // event.status_detail, event.occurred_at, event.estimated_delivery
+    }
+
+    res.sendStatus(200);
+  } catch (err) {
+    res.sendStatus(401);
+  }
 });
 ```
 
-### Webhooks
+**`rawBody` MUST be the exact bytes the provider sent.** HMAC is computed over the raw payload — parsing JSON then re-serializing it breaks signatures.
 
-```typescript
-// Register an endpoint
-const endpoint = await rateship.webhooks.create({
-  url: "https://your-app.com/webhooks",
-  events: ["label.purchased", "tracking.updated", "tracking.delivered"],
-});
-console.log(endpoint.secret); // Save this for signature verification
+**Provider support matrix:**
 
-// List endpoints
-const { endpoints } = await rateship.webhooks.list();
+| Provider | Header | Algorithm | Notes |
+|---|---|---|---|
+| Shippo | `Shippo-Auth-Signature` | HMAC-SHA256 over `<timestamp>.<body>` | 5-min replay tolerance. Contact Shippo to enable webhook signing on your account. |
+| EasyPost | `X-Hmac-Signature` | HMAC-SHA256 hex with `hmac-sha256-hex=` prefix | Secret is NFKD-normalized to match EasyPost's official clients. |
+| ShipEngine | RSA-SHA256 + JWKS | Not in v2.0.0 | Calling `verifyWebhook` for ShipEngine throws with a docs link. Shipping in v2.1. |
 
-// Toggle active/inactive
-await rateship.webhooks.update(endpoint.id, { is_active: false });
+## Subpath Imports (Tree-Shaking)
 
-// Delete
-await rateship.webhooks.delete(endpoint.id);
+If you only use one provider, import it directly for a smaller bundle:
+
+```ts
+import { RateShip } from 'rateship';
+import { easypost } from 'rateship/providers/easypost';
+
+const client = new RateShip({ providers: [easypost({ apiKey: '...' })] });
 ```
+
+Subpath imports:
+- `rateship/providers/easypost`
+- `rateship/providers/shippo`
+- `rateship/providers/shipengine`
 
 ## Error Handling
 
-```typescript
-import { RateShip, RateShipError } from "rateship";
+All errors thrown by the SDK are `RateShipError` (or a subclass). Inspect `.code` to branch.
+
+```ts
+import { RateShip, RateShipError, WebhookVerificationError } from 'rateship';
 
 try {
-  const { rates } = await rateship.rates.get({ /* ... */ });
-} catch (error) {
-  if (error instanceof RateShipError) {
-    console.log(error.message); // "Invalid API key"
-    console.log(error.code);    // "AUTH_FAILED"
-    console.log(error.status);  // 401
+  const label = await client.createLabel(rate);
+} catch (err) {
+  if (err instanceof RateShipError) {
+    console.log(err.code);      // 'AUTH_FAILED', 'TIMEOUT', etc.
+    console.log(err.provider);  // 'shippo' | 'easypost' | 'shipengine' | undefined
+    console.log(err.cause);     // underlying error (network, parse, etc.)
   }
 }
 ```
 
-### Error Codes
+**Per-provider errors inside `getRates().errors[]`** are plain data (not thrown), with the same code set:
 
-| Code | Status | Description |
-|------|--------|-------------|
-| `AUTH_FAILED` | 401 | Missing or invalid API key |
-| `INVALID_API_KEY` | 401 | API key not found or revoked |
-| `SUBSCRIPTION_REQUIRED` | 403 | Pro subscription required |
-| `VALIDATION_ERROR` | 400 | Invalid request body |
-| `USAGE_LIMIT_EXCEEDED` | 429 | Free tier limit reached |
-| `RATE_LIMITED` | 429 | Too many requests |
-| `PROVIDER_ERROR` | 502 | Shipping provider returned an error |
+| Code | When |
+|---|---|
+| `AUTH_FAILED` | Provider returned 401 or 403 — bad / expired API key. |
+| `TIMEOUT` | Request exceeded the configured timeout (default 15s). |
+| `PROVIDER_ERROR` | Provider returned a 4xx/5xx (non-auth) or a semantic failure (e.g. "insufficient postage"). |
+| `NETWORK_ERROR` | DNS failure, connection reset, TLS handshake failure, etc. |
+| `VALIDATION_ERROR` | Input validation caught a bad request before calling any provider. |
+| `CONFIGURATION_ERROR` | SDK misuse — missing API key, duplicate adapters, unsupported feature. |
+| `WEBHOOK_VERIFICATION_FAILED` | HMAC signature mismatch or timestamp too stale. |
+| `UNKNOWN` | Catch-all for errors that don't fit the above buckets. |
 
 ## TypeScript
 
-All types are exported:
+Every public type is exported from the package root:
 
-```typescript
+```ts
 import type {
+  // Config
+  RateShipOptions,
+  Provider,
+  // Input
+  Address,
+  Parcel,
   RateRequest,
+  // Output
   NormalizedRate,
   ProviderError,
   RatesResponse,
-  LabelPurchaseRequest,
-  LabelPurchaseResult,
-  LabelHistoryResponse,
-  Address,
-  Provider,
-} from "rateship";
+  Label,
+  // Webhooks
+  WebhookVerifyInput,
+  NormalizedEvent,
+  TrackingUpdatedEvent,
+  TrackingDeliveredEvent,
+  TrackingStatus,
+  EventLocation,
+  // Errors
+  ErrorCode,
+  RateShipErrorOptions,
+  // Adapter interface (for custom providers)
+  ProviderAdapter,
+  // Per-provider factory options
+  EasyPostOptions,
+  ShippoOptions,
+  ShipEngineOptions,
+} from 'rateship';
 ```
+
+## Migrating from v1
+
+The v1 SDK was an HTTP client for a hosted RateShip API. v2 talks to providers directly from your backend — no hosted service required.
+
+Biggest shape changes:
+- `rateship.rates.get(request)` → `client.getRates(request)`
+- `rateship.labels.purchase(request)` → `client.createLabel(rate)` (pass the `NormalizedRate` back, not a reconstructed request)
+- `RateShipError.status` removed — use `.code` instead (`AUTH_FAILED`, etc.)
+- `RateRequest` restructured: `from_address`/`to_address` → `from`/`to`; weight + dims extracted into a `parcel` object; `package_count` removed (single parcel at MVP).
+- `weight_unit: 'lbs'` → `'lb'` (singular, matches provider APIs).
+- `client.labels.list()` removed — no hosted history. Persist labels yourself.
+- `client.webhooks.create/list/delete/update` removed — no hosted webhook registration. Use provider dashboards directly.
+
+## Contributing
+
+Issues and PRs welcome at https://github.com/AhmedAlbarghouti/rateship-sdk.
 
 ## License
 
-MIT
+MIT — see [LICENSE](./LICENSE).
