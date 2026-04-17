@@ -42,10 +42,17 @@ interface ShippoRate {
   estimated_days?: number;
 }
 
+interface ShippoMessage {
+  source?: string;
+  code?: string;
+  text?: string;
+}
+
 interface ShippoShipmentResponse {
   object_id: string;
   status?: string;
   rates?: ShippoRate[];
+  messages?: ShippoMessage[];
 }
 
 interface ShippoTransactionResponse {
@@ -82,6 +89,21 @@ function mapParcel(p: Parcel) {
     weight: String(p.weight),
     mass_unit: p.weight_unit,
   };
+}
+
+/**
+ * Heuristic: is this Shippo message an informational alert or a hard
+ * carrier failure? Benign messages accompany non-empty rate lists
+ * (shipment alerts, per-carrier-coverage notes) and shouldn't throw.
+ * Everything else indicates a real failure when rates is empty.
+ */
+function isBenignShippoMessage(text: string | undefined): boolean {
+  if (!text) return true;
+  return (
+    /^RatedShipmentAlert:/i.test(text) ||
+    /doesn't support one or more shipment options/i.test(text) ||
+    /^Soft:/i.test(text)
+  );
 }
 
 function normalizeRate(rate: ShippoRate): NormalizedRate {
@@ -138,9 +160,28 @@ export function shippo(options: ShippoOptions): ProviderAdapter {
         },
       })) as ShippoShipmentResponse;
 
-      return (data.rates ?? [])
-        .filter((r) => r.currency === "USD")
-        .map(normalizeRate);
+      const rawRates = data.rates ?? [];
+
+      // Shippo returns status=SUCCESS with rates=[] when all connected
+      // carriers fail (e.g. UPS "Hard: Too Many Requests"). Empty-with-
+      // errors should surface as PROVIDER_ERROR, not silent success.
+      if (rawRates.length === 0) {
+        const hardErrors = (data.messages ?? []).filter(
+          (m) => !isBenignShippoMessage(m.text),
+        );
+        if (hardErrors.length > 0) {
+          const summary = hardErrors
+            .map((m) => `${m.source ?? "Shippo"}: ${m.text ?? ""}`.trim())
+            .join("; ");
+          throw new RateShipError(
+            `Shippo returned 0 rates: ${summary}`,
+            "PROVIDER_ERROR",
+            { provider: "shippo" },
+          );
+        }
+      }
+
+      return rawRates.filter((r) => r.currency === "USD").map(normalizeRate);
     },
 
     async createLabel(rate: NormalizedRate): Promise<Label> {

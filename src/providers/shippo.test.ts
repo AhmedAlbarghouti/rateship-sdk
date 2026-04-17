@@ -211,6 +211,69 @@ describe("shippo.getRates", () => {
     expect(rates[0].rate_id).toBe("rate_usd");
   });
 
+  it("throws PROVIDER_ERROR when rates is empty AND messages contains hard errors", async () => {
+    // Real-world case: Shippo returns 200 OK with status=SUCCESS but rates=[]
+    // when all connected carriers fail (rate limits, auth on sub-accounts,
+    // etc.). Silently returning [] hides the failure — surface it.
+    mockFetchJson({
+      object_id: "ship_1",
+      status: "SUCCESS",
+      rates: [],
+      messages: [
+        { source: "UPS", code: "", text: "Hard: Too Many Requests" },
+        { source: "UPS", code: "", text: "Hard: Too Many Requests" },
+      ],
+    });
+    const adapter = shippo({ apiKey: "shippo_test_xyz" });
+
+    let thrown: unknown;
+    try {
+      await adapter.getRates(sampleRequest);
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(thrown).toBeInstanceOf(RateShipError);
+    expect((thrown as RateShipError).code).toBe("PROVIDER_ERROR");
+    expect((thrown as RateShipError).provider).toBe("shippo");
+    expect((thrown as RateShipError).message).toMatch(/Too Many Requests/);
+  });
+
+  it("returns empty rates silently when messages are only informational (RatedShipmentAlert)", async () => {
+    // Not all messages indicate failure — some are just informational
+    // ("RatedShipmentAlert: Your invoice may vary..."). If the only
+    // messages are warnings, empty rates is legitimate (no carriers
+    // cover this route).
+    mockFetchJson({
+      object_id: "ship_1",
+      status: "SUCCESS",
+      rates: [],
+      messages: [
+        {
+          source: "UPS",
+          code: "110971",
+          text: "RatedShipmentAlert: Your invoice may vary from the displayed reference rates",
+        },
+      ],
+    });
+    const adapter = shippo({ apiKey: "shippo_test_xyz" });
+
+    const rates = await adapter.getRates(sampleRequest);
+    expect(rates).toEqual([]);
+  });
+
+  it("returns empty rates silently when rates=[] and messages is empty/missing", async () => {
+    mockFetchJson({
+      object_id: "ship_1",
+      status: "SUCCESS",
+      rates: [],
+    });
+    const adapter = shippo({ apiKey: "shippo_test_xyz" });
+
+    const rates = await adapter.getRates(sampleRequest);
+    expect(rates).toEqual([]);
+  });
+
   it("throws RateShipError AUTH_FAILED on 401", async () => {
     mockFetchText("unauthorized", 401);
     const adapter = shippo({ apiKey: "shippo_test_invalid" });
