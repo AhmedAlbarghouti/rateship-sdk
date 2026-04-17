@@ -1,8 +1,13 @@
 import { RateShipError } from "./errors";
 import type {
+  Label,
   NormalizedEvent,
+  NormalizedRate,
   Provider,
   ProviderAdapter,
+  ProviderError,
+  RateRequest,
+  RatesResponse,
   RateShipOptions,
   WebhookVerifyInput,
 } from "./types";
@@ -41,6 +46,69 @@ export class RateShip {
     this.adapters = byName;
     this.webhooks = new WebhooksNamespace(this.adapters);
   }
+
+  /**
+   * Fetch rates from every configured provider in parallel and return them as
+   * a single sorted list. Per-provider failures are collected in `errors[]`
+   * instead of throwing — so one provider being down never kills the call.
+   *
+   * Rates are sorted ascending by `price_cents`.
+   */
+  async getRates(request: RateRequest): Promise<RatesResponse> {
+    const adapters = Array.from(this.adapters.values());
+
+    const settled = await Promise.allSettled(
+      adapters.map((a) => a.getRates(request)),
+    );
+
+    const rates: NormalizedRate[] = [];
+    const errors: ProviderError[] = [];
+
+    settled.forEach((result, i) => {
+      const adapter = adapters[i]!;
+      if (result.status === "fulfilled") {
+        rates.push(...result.value);
+      } else {
+        errors.push(toProviderError(result.reason, adapter.name));
+      }
+    });
+
+    rates.sort((a, b) => a.price_cents - b.price_cents);
+
+    return { rates, errors };
+  }
+
+  /**
+   * Buy a shipping label for a rate returned by `getRates()`. Routes to the
+   * adapter matching `rate.provider`. Throws `RateShipError` on any failure —
+   * label purchase is single-provider so there's no partial-success shape.
+   */
+  async createLabel(rate: NormalizedRate): Promise<Label> {
+    const adapter = this.adapters.get(rate.provider);
+    if (!adapter) {
+      throw new RateShipError(
+        `No adapter configured for provider "${rate.provider}". Add ${rate.provider}(...) to the providers array when constructing RateShip.`,
+        "CONFIGURATION_ERROR",
+      );
+    }
+    return adapter.createLabel(rate);
+  }
+}
+
+/** Normalize any thrown value into a `ProviderError` for the `errors[]` array. */
+function toProviderError(reason: unknown, fallbackProvider: Provider): ProviderError {
+  if (reason instanceof RateShipError) {
+    return {
+      provider: reason.provider ?? fallbackProvider,
+      code: reason.code,
+      message: reason.message,
+    };
+  }
+  return {
+    provider: fallbackProvider,
+    code: "UNKNOWN",
+    message: reason instanceof Error ? reason.message : String(reason),
+  };
 }
 
 /**
