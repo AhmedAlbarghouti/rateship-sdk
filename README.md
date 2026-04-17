@@ -12,6 +12,8 @@ Provider-agnostic shipping SDK for Node. **One API across every major shipping p
 - **Full TypeScript.** Every response, every event, every error is typed.
 - **Tree-shakable.** Import a single provider and the rest never reaches your bundle.
 
+> **v2.0.0 is US-domestic only.** `country` on addresses is locked to `"US"` at the type level; weight uses `lb`/`oz`, distance uses `in`, and rates are filtered to USD. International shipping lands in v2.1+ as an additive widening — v2.0 code won't break when it ships.
+
 ```ts
 import { RateShip, easypost, shippo } from 'rateship';
 

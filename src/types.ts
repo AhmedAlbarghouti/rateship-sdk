@@ -19,7 +19,15 @@ export type ErrorCode =
   | "WEBHOOK_VERIFICATION_FAILED"
   | "UNKNOWN";
 
-/** Shipping address. Required fields cover the common-denominator across providers. */
+/**
+ * Shipping address. Required fields cover the common-denominator across
+ * providers.
+ *
+ * **v2.0.0 is US-domestic only.** `country` is locked to `"US"` at the type
+ * level — international shipping (US → non-US, or non-US origin) is v2.1+.
+ * Widening `country` to `string` in a future version is additive and
+ * non-breaking for existing consumers.
+ */
 export interface Address {
   name: string;
   street1: string;
@@ -28,8 +36,8 @@ export interface Address {
   city: string;
   state: string;
   zip: string;
-  /** ISO 3166-1 alpha-2 country code. */
-  country: string;
+  /** v2.0.0: locked to `"US"`. Widens to ISO 3166-1 alpha-2 in v2.1+. */
+  country: "US";
   /** Optional. Some providers require it for certain carriers; the adapter will throw `VALIDATION_ERROR` if missing when needed. */
   phone?: string;
   email?: string;
