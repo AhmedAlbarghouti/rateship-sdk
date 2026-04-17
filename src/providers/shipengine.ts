@@ -1,4 +1,6 @@
 import { RateShipError } from "../errors";
+import { createProviderFetcher } from "../internal/http";
+import { floatToCents } from "../internal/money";
 import type {
   Address,
   Label,
@@ -51,27 +53,6 @@ interface ShipEngineLabelResponse {
 }
 
 // -- Helpers -----------------------------------------------------------------
-
-function amountToCents(amount: string): number {
-  const normalized = amount.trim();
-  const sign = normalized.startsWith("-") ? -1 : 1;
-  const unsigned = normalized.replace(/^-/, "");
-  const [intPart = "0", fracPart = ""] = unsigned.split(".");
-  const padded = (fracPart + "000").slice(0, 3);
-  const wholeCents =
-    parseInt(intPart, 10) * 100 + parseInt(padded.slice(0, 2), 10);
-  const halfDigit = parseInt(padded.slice(2, 3), 10);
-  return sign * (halfDigit >= 5 ? wholeCents + 1 : wholeCents);
-}
-
-function floatToCents(amount: number): number {
-  // Convert via fixed-precision string to avoid binary FP quirks.
-  return amountToCents(amount.toFixed(3));
-}
-
-function isAbortError(err: unknown): boolean {
-  return err instanceof Error && err.name === "AbortError";
-}
 
 function mapAddress(a: Address) {
   return {
@@ -128,63 +109,6 @@ function normalizeRate(rate: ShipEngineRate): NormalizedRate {
   };
 }
 
-/** Low-level ShipEngine request with API-Key auth, timeout, unified errors. */
-async function shipEngineRequest(
-  apiKey: string,
-  baseUrl: string,
-  path: string,
-  init: { method: "GET" | "POST"; body?: unknown },
-  timeoutMs: number,
-): Promise<unknown> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const res = await fetch(`${baseUrl}${path}`, {
-      method: init.method,
-      headers: {
-        "API-Key": apiKey,
-        "Content-Type": "application/json",
-      },
-      body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
-      signal: controller.signal,
-    });
-
-    if (res.status === 401 || res.status === 403) {
-      throw new RateShipError(
-        "ShipEngine authentication failed. Check your API key.",
-        "AUTH_FAILED",
-        { provider: "shipengine" },
-      );
-    }
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new RateShipError(
-        `ShipEngine returned ${res.status}${text ? `: ${text.slice(0, 500)}` : ""}`,
-        "PROVIDER_ERROR",
-        { provider: "shipengine" },
-      );
-    }
-
-    return await res.json();
-  } catch (err) {
-    if (err instanceof RateShipError) throw err;
-    if (isAbortError(err)) {
-      throw new RateShipError("ShipEngine request timed out.", "TIMEOUT", {
-        provider: "shipengine",
-        cause: err,
-      });
-    }
-    throw new RateShipError("ShipEngine network error.", "NETWORK_ERROR", {
-      provider: "shipengine",
-      cause: err,
-    });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 // -- Adapter factory ---------------------------------------------------------
 
 /**
@@ -203,24 +127,24 @@ export function shipengine(options: ShipEngineOptions): ProviderAdapter {
 
   const apiKey = options.apiKey;
   const baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const request = createProviderFetcher({
+    provider: "shipengine",
+    defaultTimeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  });
+  const authHeaders = { "API-Key": apiKey };
 
   return {
     name: "shipengine",
 
-    async getRates(request: RateRequest): Promise<NormalizedRate[]> {
+    async getRates(req: RateRequest): Promise<NormalizedRate[]> {
       // ShipEngine requires explicit carrier_ids on /rates.
-      const carriersData = (await shipEngineRequest(
-        apiKey,
-        baseUrl,
-        "/carriers",
-        { method: "GET" },
-        timeoutMs,
-      )) as ShipEngineCarriersResponse;
+      const carriersData = (await request({
+        url: `${baseUrl}/carriers`,
+        method: "GET",
+        headers: authHeaders,
+      })) as ShipEngineCarriersResponse;
 
-      const carrierIds = (carriersData.carriers ?? []).map(
-        (c) => c.carrier_id,
-      );
+      const carrierIds = (carriersData.carriers ?? []).map((c) => c.carrier_id);
 
       if (carrierIds.length === 0) {
         throw new RateShipError(
@@ -230,22 +154,19 @@ export function shipengine(options: ShipEngineOptions): ProviderAdapter {
         );
       }
 
-      const payload = {
-        rate_options: { carrier_ids: carrierIds },
-        shipment: {
-          ship_from: mapAddress(request.from),
-          ship_to: mapAddress(request.to),
-          packages: [mapPackage(request.parcel)],
+      const data = (await request({
+        url: `${baseUrl}/rates`,
+        method: "POST",
+        headers: authHeaders,
+        body: {
+          rate_options: { carrier_ids: carrierIds },
+          shipment: {
+            ship_from: mapAddress(req.from),
+            ship_to: mapAddress(req.to),
+            packages: [mapPackage(req.parcel)],
+          },
         },
-      };
-
-      const data = (await shipEngineRequest(
-        apiKey,
-        baseUrl,
-        "/rates",
-        { method: "POST", body: payload },
-        timeoutMs,
-      )) as ShipEngineRatesResponse;
+      })) as ShipEngineRatesResponse;
 
       return (data.rate_response?.rates ?? [])
         .filter((r) => r.shipping_amount.currency.toLowerCase() === "usd")
@@ -261,20 +182,16 @@ export function shipengine(options: ShipEngineOptions): ProviderAdapter {
         );
       }
 
-      const data = (await shipEngineRequest(
-        apiKey,
-        baseUrl,
-        `/labels/rates/${encodeURIComponent(rate.rate_id)}`,
-        {
-          method: "POST",
-          body: {
-            validate_address: "no_validation",
-            label_format: "pdf",
-            label_download_type: "url",
-          },
+      const data = (await request({
+        url: `${baseUrl}/labels/rates/${encodeURIComponent(rate.rate_id)}`,
+        method: "POST",
+        headers: authHeaders,
+        body: {
+          validate_address: "no_validation",
+          label_format: "pdf",
+          label_download_type: "url",
         },
-        timeoutMs,
-      )) as ShipEngineLabelResponse;
+      })) as ShipEngineLabelResponse;
 
       if (data.status !== "completed") {
         throw new RateShipError(

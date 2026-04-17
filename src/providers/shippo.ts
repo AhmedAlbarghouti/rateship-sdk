@@ -1,4 +1,6 @@
 import { RateShipError } from "../errors";
+import { createProviderFetcher } from "../internal/http";
+import { amountToCents } from "../internal/money";
 import type {
   Address,
   Label,
@@ -19,7 +21,7 @@ export interface ShippoOptions {
   timeoutMs?: number;
 }
 
-// -- Shippo API response types (minimal — we only type the fields we use) ----
+// -- Shippo API response types (minimal — only fields we consume) ------------
 
 interface ShippoRate {
   object_id: string;
@@ -46,27 +48,6 @@ interface ShippoTransactionResponse {
 }
 
 // -- Helpers -----------------------------------------------------------------
-
-/**
- * Convert a decimal string like "8.40" or "12.345" to integer cents.
- * Uses string slicing (not float math) to avoid binary-FP rounding errors
- * that make `Math.round(12.345 * 100)` return 1234 instead of 1235.
- */
-function amountToCents(amount: string): number {
-  const normalized = amount.trim();
-  const sign = normalized.startsWith("-") ? -1 : 1;
-  const unsigned = normalized.replace(/^-/, "");
-  const [intPart = "0", fracPart = ""] = unsigned.split(".");
-  const padded = (fracPart + "000").slice(0, 3);
-  const wholeCents =
-    parseInt(intPart, 10) * 100 + parseInt(padded.slice(0, 2), 10);
-  const halfDigit = parseInt(padded.slice(2, 3), 10);
-  return sign * (halfDigit >= 5 ? wholeCents + 1 : wholeCents);
-}
-
-function isAbortError(err: unknown): boolean {
-  return err instanceof Error && err.name === "AbortError";
-}
 
 function mapAddress(a: Address) {
   return {
@@ -107,64 +88,6 @@ function normalizeRate(rate: ShippoRate): NormalizedRate {
   };
 }
 
-/** Low-level Shippo POST wrapper with timeout + unified error mapping. */
-async function shippoPost(
-  apiKey: string,
-  baseUrl: string,
-  path: string,
-  body: unknown,
-  timeoutMs: number,
-): Promise<unknown> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(`${baseUrl}${path}`, {
-      method: "POST",
-      headers: {
-        Authorization: `ShippoToken ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-
-    if (res.status === 401 || res.status === 403) {
-      throw new RateShipError(
-        "Shippo authentication failed. Check your API key.",
-        "AUTH_FAILED",
-        { provider: "shippo" },
-      );
-    }
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new RateShipError(
-        `Shippo returned ${res.status}${text ? `: ${text.slice(0, 500)}` : ""}`,
-        "PROVIDER_ERROR",
-        { provider: "shippo" },
-      );
-    }
-
-    return await res.json();
-  } catch (err) {
-    if (err instanceof RateShipError) throw err;
-    if (isAbortError(err)) {
-      throw new RateShipError(
-        "Shippo request timed out.",
-        "TIMEOUT",
-        { provider: "shippo", cause: err },
-      );
-    }
-    throw new RateShipError(
-      "Shippo network error.",
-      "NETWORK_ERROR",
-      { provider: "shippo", cause: err },
-    );
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 // -- Adapter factory ---------------------------------------------------------
 
 /**
@@ -183,26 +106,27 @@ export function shippo(options: ShippoOptions): ProviderAdapter {
 
   const apiKey = options.apiKey;
   const baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const request = createProviderFetcher({
+    provider: "shippo",
+    defaultTimeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  });
+  const authHeaders = { Authorization: `ShippoToken ${apiKey}` };
 
   return {
     name: "shippo",
 
-    async getRates(request: RateRequest): Promise<NormalizedRate[]> {
-      const payload = {
-        address_from: mapAddress(request.from),
-        address_to: mapAddress(request.to),
-        parcels: [mapParcel(request.parcel)],
-        async: false,
-      };
-
-      const data = (await shippoPost(
-        apiKey,
-        baseUrl,
-        "/shipments/",
-        payload,
-        timeoutMs,
-      )) as ShippoShipmentResponse;
+    async getRates(req: RateRequest): Promise<NormalizedRate[]> {
+      const data = (await request({
+        url: `${baseUrl}/shipments/`,
+        method: "POST",
+        headers: authHeaders,
+        body: {
+          address_from: mapAddress(req.from),
+          address_to: mapAddress(req.to),
+          parcels: [mapParcel(req.parcel)],
+          async: false,
+        },
+      })) as ShippoShipmentResponse;
 
       return (data.rates ?? [])
         .filter((r) => r.currency === "USD")
@@ -220,13 +144,12 @@ export function shippo(options: ShippoOptions): ProviderAdapter {
         );
       }
 
-      const data = (await shippoPost(
-        apiKey,
-        baseUrl,
-        "/transactions/",
-        { rate: rateObjectId, label_file_type: "PDF", async: false },
-        timeoutMs,
-      )) as ShippoTransactionResponse;
+      const data = (await request({
+        url: `${baseUrl}/transactions/`,
+        method: "POST",
+        headers: authHeaders,
+        body: { rate: rateObjectId, label_file_type: "PDF", async: false },
+      })) as ShippoTransactionResponse;
 
       if (data.status !== "SUCCESS") {
         const messages =
