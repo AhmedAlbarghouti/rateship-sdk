@@ -1,6 +1,6 @@
 {
   "name": "rateship",
-  "version": "2.0.0-rc.0",
+  "version": "2.0.0-rc.1",
   "description": "Provider-agnostic shipping SDK for Node. One API, every provider (EasyPost, Shippo, ShipEngine), your backend.",
   "type": "module",
   "main": "dist/index.cjs",
