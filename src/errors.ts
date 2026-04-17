@@ -1,8 +1,8 @@
 import type { ErrorCode, Provider } from "./types";
 
 export interface RateShipErrorOptions {
-  provider?: Provider;
-  cause?: unknown;
+	provider?: Provider;
+	cause?: unknown;
 }
 
 /**
@@ -14,22 +14,26 @@ export interface RateShipErrorOptions {
  * (often a `fetch` error or a provider response body).
  */
 export class RateShipError extends Error {
-  public readonly code: ErrorCode;
-  public readonly provider?: Provider;
-  public override readonly cause?: unknown;
+	public readonly code: ErrorCode;
+	public readonly provider?: Provider;
+	public override readonly cause?: unknown;
 
-  constructor(message: string, code: ErrorCode, options?: RateShipErrorOptions) {
-    super(message);
-    this.name = "RateShipError";
-    this.code = code;
-    this.provider = options?.provider;
-    this.cause = options?.cause;
-  }
+	constructor(
+		message: string,
+		code: ErrorCode,
+		options?: RateShipErrorOptions,
+	) {
+		super(message);
+		this.name = "RateShipError";
+		this.code = code;
+		this.provider = options?.provider;
+		this.cause = options?.cause;
+	}
 }
 
 export interface WebhookVerificationErrorOptions {
-  provider?: Provider;
-  cause?: unknown;
+	provider?: Provider;
+	cause?: unknown;
 }
 
 /**
@@ -38,8 +42,8 @@ export interface WebhookVerificationErrorOptions {
  * errors loudly so auth bypass bugs are impossible.
  */
 export class WebhookVerificationError extends RateShipError {
-  constructor(message: string, options?: WebhookVerificationErrorOptions) {
-    super(message, "WEBHOOK_VERIFICATION_FAILED", options);
-    this.name = "WebhookVerificationError";
-  }
+	constructor(message: string, options?: WebhookVerificationErrorOptions) {
+		super(message, "WEBHOOK_VERIFICATION_FAILED", options);
+		this.name = "WebhookVerificationError";
+	}
 }

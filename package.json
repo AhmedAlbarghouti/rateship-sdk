@@ -1,76 +1,76 @@
 {
-  "name": "rateship",
-  "version": "2.0.0-rc.3",
-  "description": "Provider-agnostic shipping SDK for Node. One API, every provider (EasyPost, Shippo, ShipEngine), your backend.",
-  "type": "module",
-  "main": "dist/index.cjs",
-  "module": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
-    },
-    "./providers/easypost": {
-      "types": "./dist/providers/easypost.d.ts",
-      "import": "./dist/providers/easypost.js",
-      "require": "./dist/providers/easypost.cjs"
-    },
-    "./providers/shippo": {
-      "types": "./dist/providers/shippo.d.ts",
-      "import": "./dist/providers/shippo.js",
-      "require": "./dist/providers/shippo.cjs"
-    },
-    "./providers/shipengine": {
-      "types": "./dist/providers/shipengine.d.ts",
-      "import": "./dist/providers/shipengine.js",
-      "require": "./dist/providers/shipengine.cjs"
-    }
-  },
-  "files": [
-    "dist",
-    "CHANGELOG.md"
-  ],
-  "engines": {
-    "node": ">=20"
-  },
-  "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "lint": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
-  },
-  "keywords": [
-    "shipping",
-    "shipping-sdk",
-    "shipping-rates",
-    "shipping-labels",
-    "shippo",
-    "easypost",
-    "shipengine",
-    "carriers",
-    "ups",
-    "usps",
-    "fedex",
-    "rateship"
-  ],
-  "author": "RateShip <support@rateship.io>",
-  "license": "MIT",
-  "homepage": "https://rateship.io/docs",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/AhmedAlbarghouti/rateship-sdk.git"
-  },
-  "bugs": {
-    "url": "https://github.com/AhmedAlbarghouti/rateship-sdk/issues"
-  },
-  "devDependencies": {
-    "@types/node": "^20.0.0",
-    "tsup": "^8.0.0",
-    "typescript": "^5.0.0",
-    "vitest": "^2.1.9"
-  }
+	"name": "rateship",
+	"version": "2.0.0-rc.0",
+	"description": "Provider-agnostic shipping SDK for Node. One API, every provider (EasyPost, Shippo, ShipEngine), your backend.",
+	"type": "module",
+	"main": "dist/index.cjs",
+	"module": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js",
+			"require": "./dist/index.cjs"
+		},
+		"./providers/easypost": {
+			"types": "./dist/providers/easypost.d.ts",
+			"import": "./dist/providers/easypost.js",
+			"require": "./dist/providers/easypost.cjs"
+		},
+		"./providers/shippo": {
+			"types": "./dist/providers/shippo.d.ts",
+			"import": "./dist/providers/shippo.js",
+			"require": "./dist/providers/shippo.cjs"
+		},
+		"./providers/shipengine": {
+			"types": "./dist/providers/shipengine.d.ts",
+			"import": "./dist/providers/shipengine.js",
+			"require": "./dist/providers/shipengine.cjs"
+		}
+	},
+	"files": [
+		"dist",
+		"CHANGELOG.md"
+	],
+	"engines": {
+		"node": ">=20"
+	},
+	"scripts": {
+		"build": "tsup",
+		"dev": "tsup --watch",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"lint": "tsc --noEmit",
+		"prepublishOnly": "npm run build"
+	},
+	"keywords": [
+		"shipping",
+		"shipping-sdk",
+		"shipping-rates",
+		"shipping-labels",
+		"shippo",
+		"easypost",
+		"shipengine",
+		"carriers",
+		"ups",
+		"usps",
+		"fedex",
+		"rateship"
+	],
+	"author": "RateShip <support@rateship.io>",
+	"license": "MIT",
+	"homepage": "https://rateship.io/docs",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/AhmedAlbarghouti/rateship-sdk.git"
+	},
+	"bugs": {
+		"url": "https://github.com/AhmedAlbarghouti/rateship-sdk/issues"
+	},
+	"devDependencies": {
+		"@types/node": "^20.0.0",
+		"tsup": "^8.0.0",
+		"typescript": "^5.0.0",
+		"vitest": "^2.1.9"
+	}
 }
