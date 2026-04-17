@@ -62,10 +62,10 @@
 	"homepage": "https://rateship.io/docs",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/AhmedAlbarghouti/rateship-sdk.git"
+		"url": "git+https://github.com/AhmedAlbarghouti/rateship.git"
 	},
 	"bugs": {
-		"url": "https://github.com/AhmedAlbarghouti/rateship-sdk/issues"
+		"url": "https://github.com/AhmedAlbarghouti/rateship/issues"
 	},
 	"devDependencies": {
 		"@types/node": "^20.0.0",

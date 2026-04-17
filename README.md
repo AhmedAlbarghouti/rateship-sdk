@@ -307,7 +307,7 @@ Biggest shape changes:
 
 ## Contributing
 
-Issues and PRs welcome at https://github.com/AhmedAlbarghouti/rateship-sdk.
+Issues and PRs welcome at https://github.com/AhmedAlbarghouti/rateship.
 
 ## License
 
